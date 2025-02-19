@@ -1,7 +1,7 @@
 # PVT-Aware Sizing using INSIGHT
 
-**Target Key innovations:
-**
+# Target Key innovations:
+
 1. Few-Shot Learning to transfer INSIGHT Nominal (Base Model) to PVT corners
 2. Leveraging nominal corner circuit physics and trajectory knowledge as a low-fidelity representation for intelligent targeted sampling in the high-fidelity PVT corners
 (Intelligent Sampling) 
