@@ -1,0 +1,11 @@
+{
+    "perf_order_config":[
+        "IQ",
+        "Efficiency",
+        "Dropout",
+        "Phase_Margin",
+        "PSRR",
+        "Line_Reg_Percent",
+        "Load_Reg_Percent"
+    ]
+}

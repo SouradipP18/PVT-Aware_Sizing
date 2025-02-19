@@ -25,6 +25,7 @@ import pickle
 import os
 import pandas as pd
 import sys
+import json
 
 working_dir = os.path.dirname(os.path.realpath(__file__))
 sys.path.append(working_dir)
@@ -65,15 +66,20 @@ params_header = [
     "cl",
 ]
 
-present_order_header = params_header + [
-    "IQ",
-    "Dropout",
-    "Load_Reg_Percent",
-    "Efficiency",
-    "Phase_Margin",
-    "Line_Reg_Percent",
-    "PSRR",
-]
+with open(os.path.join(working_dir, "perf_config.json"), "r") as f:
+    present_perf_config = json.load(f)
+
+
+present_order_header = params_header + present_perf_config["perf_order_config"]
+# [
+#     "IQ",
+#     "Dropout",
+#     "Load_Reg_Percent",
+#     "Efficiency",
+#     "Phase_Margin",
+#     "Line_Reg_Percent",
+#     "PSRR",
+# ]
 
 df_45nm_train_val.columns = present_order_header
 df_45nm_test.columns = present_order_header
