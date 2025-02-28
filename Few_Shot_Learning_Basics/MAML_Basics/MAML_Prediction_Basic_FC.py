@@ -16,7 +16,7 @@ device = torch.device("cuda" if cuda.is_available() else "cpu")
 
 
 # Generate 17 similar functions
-def generate_functions(num_functions, input_dim=5, output_dim=5):
+def generate_simple_functions(num_functions, input_dim=5, output_dim=5):
     functions = []
     for _ in range(num_functions):
         # Generate random coefficients for each function
@@ -30,6 +30,33 @@ def generate_functions(num_functions, input_dim=5, output_dim=5):
 
         functions.append(func)
     return functions
+
+
+def generate_polynomial_functions(
+    num_functions, input_dim=5, output_dim=5, max_degree=3
+):
+    polyfunctions = []
+    for _ in range(num_functions):
+        # Generate random coefficients for each function and for each degree
+        # coeffs shape will be (output_dim, input_dim, max_degree)
+        # Each output dimension will have a different polynomial equation
+        coeffs = np.random.randn(output_dim, input_dim, max_degree) * 0.1
+        bias = np.random.randn(output_dim) * 0.1
+
+        def poly_func(x, coeff=coeffs, b=bias):
+            # x should be (n_samples, input_dim)
+            # We calculate the polynomial for each input dimension and sum them
+            y = np.zeros((x.shape[0], output_dim))
+            for i in range(output_dim):
+                for j in range(input_dim):
+                    for d in range(max_degree):
+                        # Compute x^d for the current degree, d+1 because range starts at 0
+                        y[:, i] += coeff[i, j, d] * np.power(x[:, j], d + 1)
+                y[:, i] += b[i]
+            return y
+
+        polyfunctions.append(poly_func)
+    return polyfunctions
 
 
 ######################################################## Simple fully connected neural network ####################################################
@@ -128,17 +155,28 @@ output_dim = 5
 num_shots = 2  # 5
 
 # Hyper-parameters
-num_tasks = 45  # 16+1
+num_tasks = (
+    45  # 16+1 # More the tasks, better the generalization/evaluation score on new tasks
+)
 tasks_per_batch = 5
 num_batches = 10  # 100 # 10000
 num_support_samples = 10  # "Few Shots" during training and inference/evaluation
-num_query_samples = 20  # During training
+num_query_samples = 50  # During training
 num_epochs = 100  # 10000  # Number of Meta-Iterations
 
-functions = generate_functions(num_tasks, input_dim, output_dim)
+functions = generate_simple_functions(num_tasks, input_dim, output_dim)
 
 query_losses = []
 support_losses = []
+
+# Pre-generate task data to keep a count on the amount of training data needed
+task_data = {}
+for func_id, func in enumerate(functions):
+    task_support_x, task_support_y = generate_task_data(
+        func, num_support_samples, input_dim
+    )
+    task_query_x, task_query_y = generate_task_data(func, num_query_samples, input_dim)
+    task_data[func_id] = (task_support_x, task_support_y, task_query_x, task_query_y)
 
 
 # Main training loop
@@ -154,14 +192,15 @@ def train_maml(maml, functions, num_epochs, tasks_per_batch):
                 f"Epoch {epoch+1}, Batch {batch+1}, Selected Task IDs: {selected_funcs}"
             )
             for func_id in selected_funcs:
-                func = functions[func_id]
-                support_x, support_y = generate_task_data(
-                    func, num_support_samples, input_dim
-                )
-                query_x, query_y = generate_task_data(
-                    func, num_query_samples, input_dim
-                )
-                tasks.append((support_x, support_y, query_x, query_y))
+                tasks.append(task_data[func_id])
+                # func = functions[func_id]
+                # support_x, support_y = generate_task_data(
+                #     func, num_support_samples, input_dim
+                # )
+                # query_x, query_y = generate_task_data(
+                #     func, num_query_samples, input_dim
+                # )
+                # tasks.append((support_x, support_y, query_x, query_y))
             loss = maml.outer_step(tasks)
             total_loss += loss
         avg_loss = total_loss / (tasks_per_batch * num_batches)
@@ -174,7 +213,7 @@ def train_maml(maml, functions, num_epochs, tasks_per_batch):
         #    print(f"Evaluation Loss at Epoch {epoch+1}: {eval_loss:.4f}")
 
 
-test_functions = generate_functions(
+test_functions = generate_simple_functions(
     5, input_dim, output_dim
 )  # Evaluation of the learnt meta/starting parameters on 5 Unseen functions
 num_support_test_samples = num_support_samples
