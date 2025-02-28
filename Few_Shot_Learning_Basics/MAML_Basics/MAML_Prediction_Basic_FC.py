@@ -6,10 +6,19 @@ import copy
 import torch.cuda as cuda
 import matplotlib.pyplot as plt
 from sklearn.preprocessing import StandardScaler
+import os
+import sys
+
+working_dir = os.path.dirname(os.path.realpath(__file__))
+sys.path.append(working_dir)
 
 # Set random seed
 torch.manual_seed(42)
 np.random.seed(42)
+
+# Initialize scalers
+x_scaler = StandardScaler()
+y_scaler = StandardScaler()
 
 # Device configuration
 device = torch.device("cuda" if cuda.is_available() else "cpu")
@@ -150,6 +159,23 @@ def generate_task_data(func, num_samples, input_dim):
     return torch.FloatTensor(x).to(device), torch.FloatTensor(y).to(device)
 
 
+def preprocess_data(train_x, train_y, test_x, test_y):
+
+    # Fit scalers on training data
+    train_x = x_scaler.fit_transform(train_x)
+    train_y = y_scaler.fit_transform(train_y)
+
+    # Transform test data
+    test_x = x_scaler.transform(test_x)
+    test_y = y_scaler.transform(test_y)
+    return (
+        torch.FloatTensor(train_x).to(device),
+        torch.FloatTensor(train_y).to(device),
+        torch.FloatTensor(test_x).to(device),
+        torch.FloatTensor(test_y).to(device),
+    )
+
+
 input_dim = 5
 output_dim = 5
 num_shots = 2  # 5
@@ -158,13 +184,14 @@ num_shots = 2  # 5
 num_tasks = (
     45  # 16+1 # More the tasks, better the generalization/evaluation score on new tasks
 )
-tasks_per_batch = 5
-num_batches = 10  # 100 # 10000
+tasks_per_batch = 8  # 5
+num_batches = 8  # 10 # 100 # 10000
 num_support_samples = 10  # "Few Shots" during training and inference/evaluation
 num_query_samples = 50  # During training
 num_epochs = 100  # 10000  # Number of Meta-Iterations
 
-functions = generate_simple_functions(num_tasks, input_dim, output_dim)
+# functions = generate_simple_functions(num_tasks, input_dim, output_dim)
+functions = generate_polynomial_functions(num_tasks)
 
 query_losses = []
 support_losses = []
@@ -176,6 +203,9 @@ for func_id, func in enumerate(functions):
         func, num_support_samples, input_dim
     )
     task_query_x, task_query_y = generate_task_data(func, num_query_samples, input_dim)
+    task_support_x, task_support_y, task_query_x, task_query_y = preprocess_data(
+        task_support_x, task_support_y, task_query_x, task_query_y
+    )
     task_data[func_id] = (task_support_x, task_support_y, task_query_x, task_query_y)
 
 
@@ -213,9 +243,10 @@ def train_maml(maml, functions, num_epochs, tasks_per_batch):
         #    print(f"Evaluation Loss at Epoch {epoch+1}: {eval_loss:.4f}")
 
 
-test_functions = generate_simple_functions(
-    5, input_dim, output_dim
-)  # Evaluation of the learnt meta/starting parameters on 5 Unseen functions
+################### Evaluation of the learnt meta/starting parameters on 5 Unseen functions ########################
+
+# test_functions = generate_simple_functions(5, input_dim, output_dim)
+test_functions = generate_polynomial_functions(5)
 num_support_test_samples = num_support_samples
 num_query_test_samples = (
     20  # Small since the available data would be small during evaluation
@@ -228,9 +259,10 @@ def evaluate_maml(maml, test_functions):
     print(
         "%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%% Evaluation Starts Here %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%"
     )
-    print()
     total_loss = 0
     for func_idx, func in enumerate(test_functions):
+        print()
+        print(f"Evaluation Task {func_idx+1} :::::::::::::::::::")
         support_x, support_y = generate_task_data(
             func, num_support_test_samples, input_dim
         )
@@ -253,13 +285,18 @@ def evaluate_maml(maml, test_functions):
             query_pred = adapted_model(query_x)
             loss = nn.MSELoss()(query_pred, query_y)
             total_loss += loss.item()
-        print(f"  Evaluation Task {func_idx+1}, Loss: {loss.item():.4f}")
+        print(f"  Query Loss: {loss.item():.4f}")
     return total_loss / len(functions)
 
 
 # You can use a pre-trained model here and then the above algorithm would just fine-tune this model then. Also should save training time.
 model = SimpleNet(input_dim, output_dim).to(device)
-maml = MAML(model, inner_lr=0.01, num_inner_steps=num_shots)
+
+# # Loading the Pre-Trained Weights from the Nominal
+# model_save_path = os.path.join(working_dir, "Nominal_Model.pth")
+# model.load_state_dict(torch.load(model_save_path))
+
+maml = MAML(model, inner_lr=0.02, num_inner_steps=num_shots)
 train_maml(maml, functions, num_epochs=num_epochs, tasks_per_batch=tasks_per_batch)
 eval_loss = evaluate_maml(maml, test_functions)
 print(f"Evaluation Loss: {eval_loss}")

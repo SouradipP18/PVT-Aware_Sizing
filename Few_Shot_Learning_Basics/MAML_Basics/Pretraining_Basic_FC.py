@@ -6,17 +6,22 @@ import copy
 import torch.cuda as cuda
 import matplotlib.pyplot as plt
 from sklearn.preprocessing import StandardScaler
+import os
+import sys
+
+working_dir = os.path.dirname(os.path.realpath(__file__))
+sys.path.append(working_dir)
 
 # Set random seed
-torch.manual_seed(42)
-np.random.seed(42)
+torch.manual_seed(30)
+np.random.seed(30)
 
 # Device configuration
 device = torch.device("cuda" if cuda.is_available() else "cpu")
 
 
 # Generate 17 similar functions
-def generate_functions(num_functions, input_dim=5, output_dim=5):
+def generate_simple_functions(num_functions, input_dim=5, output_dim=5):
     functions = []
     for _ in range(num_functions):
         # Generate random coefficients for each function
@@ -32,15 +37,42 @@ def generate_functions(num_functions, input_dim=5, output_dim=5):
     return functions
 
 
+def generate_polynomial_functions(
+    num_functions, input_dim=5, output_dim=5, max_degree=3
+):
+    polyfunctions = []
+    for _ in range(num_functions):
+        # Generate random coefficients for each function and for each degree
+        # coeffs shape will be (output_dim, input_dim, max_degree)
+        # Each output dimension will have a different polynomial equation
+        coeffs = np.random.randn(output_dim, input_dim, max_degree) * 0.1
+        bias = np.random.randn(output_dim) * 0.1
+
+        def poly_func(x, coeff=coeffs, b=bias):
+            # x should be (n_samples, input_dim)
+            # We calculate the polynomial for each input dimension and sum them
+            y = np.zeros((x.shape[0], output_dim))
+            for i in range(output_dim):
+                for j in range(input_dim):
+                    for d in range(max_degree):
+                        # Compute x^d for the current degree, d+1 because range starts at 0
+                        y[:, i] += coeff[i, j, d] * np.power(x[:, j], d + 1)
+                y[:, i] += b[i]
+            return y
+
+        polyfunctions.append(poly_func)
+    return polyfunctions
+
+
 ######################################################## Simple fully connected neural network ####################################################
 
 
 class SimpleNet(nn.Module):
     def __init__(self, input_dim, output_dim):
         super(SimpleNet, self).__init__()
-        self.fc1 = nn.Linear(input_dim, 16)
-        self.fc2 = nn.Linear(16, 16)
-        self.fc3 = nn.Linear(16, output_dim)
+        self.fc1 = nn.Linear(input_dim, 64)
+        self.fc2 = nn.Linear(64, 64)
+        self.fc3 = nn.Linear(64, output_dim)
 
     def forward(self, x):
         x = torch.relu(self.fc1(x))
@@ -79,8 +111,8 @@ def preprocess_data(train_x, train_y, test_x, test_y):
 
 input_dim = 5
 output_dim = 5
-func = generate_functions(1, input_dim, output_dim)[0]
-num_epochs = 1000
+func = generate_polynomial_functions(1)[0]
+num_epochs = 30000
 
 model = SimpleNet(input_dim, output_dim).to(device)
 weight_decay = 1e-5  # L2 Regularization
@@ -89,7 +121,7 @@ criterion = nn.MSELoss()
 scheduler = optim.lr_scheduler.CosineAnnealingWarmRestarts(optimizer, T_0=100)
 
 
-# Generate training and testing data once
+# Generate training and testing data once (For Pre-training)
 num_train_samples = 1000
 num_test_samples = 1000
 train_x, train_y = generate_task_data(func, num_train_samples, input_dim)
@@ -114,3 +146,7 @@ for epoch in range(num_epochs):
         print(
             f"Pretrain Epoch {epoch+1}, Train Loss: {loss.item():.4f}, Test Loss: {test_loss.item():.4f}"
         )
+
+
+model_save_path = os.path.join(working_dir, "Nominal_Model.pth")
+torch.save(model.state_dict(), model_save_path)
