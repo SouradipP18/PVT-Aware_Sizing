@@ -74,14 +74,16 @@ def generate_polynomial_functions(
 class SimpleNet(nn.Module):
     def __init__(self, input_dim, output_dim):
         super(SimpleNet, self).__init__()
-        self.fc1 = nn.Linear(input_dim, 64)
-        self.fc2 = nn.Linear(64, 64)
-        self.fc3 = nn.Linear(64, output_dim)
+        self.fc1 = nn.Linear(input_dim, 128)
+        self.fc2 = nn.Linear(128, 128)
+        self.fc3 = nn.Linear(128, 128)
+        self.fc4 = nn.Linear(128, output_dim)
 
     def forward(self, x):
         x = torch.relu(self.fc1(x))
         x = torch.relu(self.fc2(x))
-        return self.fc3(x)
+        x = torch.relu(self.fc3(x))
+        return self.fc4(x)
 
 
 # MAML algorithm
@@ -92,55 +94,52 @@ class MAML:
         self.num_inner_steps = num_inner_steps  # Number of shots
         self.meta_optimizer = optim.Adam(self.model.parameters())
         self.meta_scheduler = optim.lr_scheduler.CosineAnnealingWarmRestarts(
-            self.meta_optimizer, T_0=50
+            self.meta_optimizer, T_0=100
         )
 
     def inner_loop(self, support_x, support_y):
-        present_model = self.clone_model()
+        present_model = self.clone_model().to(device)
+        present_model.train()
         inner_loop_optimizer = optim.Adam(present_model.parameters(), self.inner_lr)
         for _ in range(self.num_inner_steps):
             # Using the current/latest task-specific params for the ongoing few-shot pass, not the self.model (meta-parameters)
             pred = present_model(support_x)
             loss = nn.MSELoss()(pred, support_y)
-
-            # Also other optimizers like SGDS, Adam can be used here
-            # grads = torch.autograd.grad(
-            #     loss, present_model.parameters(), create_graph=True
-            # )
-            # # Now update the present model with the new params
-            # for p, g in zip(present_model.parameters(), grads):
-            #     p.data.sub_(self.inner_lr * g)
             inner_loop_optimizer.zero_grad()
-            loss.backward(create_graph=True)
+            loss.backward()
             inner_loop_optimizer.step()
-
             print(f"    Inner Step {_+1}, Support Loss: {loss.item():.4f}")
-        return list(present_model.parameters())  # Last Updated Params
+        return present_model.state_dict()
 
     def outer_step(self, tasks):
+        losses = []  # List to collect losses
         outer_loss = 0
         for task_idx, (support_x, support_y, query_x, query_y) in enumerate(tasks):
             print(f"  Running Task {task_idx+1}")
-            adapted_params = self.inner_loop(support_x, support_y)
-
-            # Use adapted params to compute loss on query set
-            with torch.set_grad_enabled(self.model.training):
-                adapted_model = self.clone_model()
-                adapted_model.load_state_dict(
-                    {
-                        name: param
-                        for name, param in zip(
-                            self.model.state_dict().keys(), adapted_params
-                        )
-                    }
-                )
-                query_pred = adapted_model(query_x)
-                query_loss = nn.MSELoss()(query_pred, query_y)
-                outer_loss += query_loss
+            adapted_params_dict = self.inner_loop(support_x, support_y)
+            adapted_model = self.clone_model().to(device)
+            adapted_model.load_state_dict(adapted_params_dict)
+            query_pred = adapted_model(query_x)
+            query_loss = nn.MSELoss()(query_pred, query_y)
+            # print(query_loss)
+            losses.append(query_loss)
             print(f"  Task {task_idx+1}, Query Loss: {query_loss.item():.4f}")
-        avg_outer_loss = outer_loss / (tasks_per_batch * len(tasks))  # Per function
+
+        self.model.train()
+        for param in self.model.parameters():
+            param.requires_grad = True
+        # Calculate the average or total outer loss from the list of losses
+        avg_outer_loss = torch.stack(losses).mean()
+        # print(avg_outer_loss)
+        print(avg_outer_loss.grad_fn)
         self.meta_optimizer.zero_grad()
-        avg_outer_loss.backward()
+        avg_outer_loss.backward(retain_graph=True)
+
+        for name, param in self.model.named_parameters():
+            if param.grad is not None:
+                print(f"Gradient for {name}: {param.grad.norm().item()}")
+            else:
+                print(f"No gradient for {name}")
         self.meta_optimizer.step()
         self.meta_scheduler.step()
         return avg_outer_loss.item()
@@ -186,9 +185,9 @@ num_tasks = (
 )
 tasks_per_batch = 8  # 5
 num_batches = 8  # 10 # 100 # 10000
-num_support_samples = 10  # "Few Shots" during training and inference/evaluation
-num_query_samples = 50  # During training
-num_epochs = 100  # 10000  # Number of Meta-Iterations
+num_support_samples = 30  # "Few Shots" during training and inference/evaluation
+num_query_samples = 60  # During training
+num_epochs = 200  # 500  # 10000  # Number of Meta-Iterations
 
 # functions = generate_simple_functions(num_tasks, input_dim, output_dim)
 functions = generate_polynomial_functions(num_tasks)
@@ -198,6 +197,7 @@ support_losses = []
 
 # Pre-generate task data to keep a count on the amount of training data needed
 task_data = {}
+tasks_eval = []
 for func_id, func in enumerate(functions):
     task_support_x, task_support_y = generate_task_data(
         func, num_support_samples, input_dim
@@ -207,12 +207,14 @@ for func_id, func in enumerate(functions):
         task_support_x, task_support_y, task_query_x, task_query_y
     )
     task_data[func_id] = (task_support_x, task_support_y, task_query_x, task_query_y)
+    tasks_eval.append(task_data[func_id])
 
 
 # Main training loop
 def train_maml(maml, functions, num_epochs, tasks_per_batch):
     for epoch in range(num_epochs):  # Each meta-iteration
         total_loss = 0
+        maml.model.train()
         for batch in range(num_batches):
             tasks = []
             selected_funcs = np.random.choice(
@@ -223,19 +225,29 @@ def train_maml(maml, functions, num_epochs, tasks_per_batch):
             )
             for func_id in selected_funcs:
                 tasks.append(task_data[func_id])
-                # func = functions[func_id]
-                # support_x, support_y = generate_task_data(
-                #     func, num_support_samples, input_dim
-                # )
-                # query_x, query_y = generate_task_data(
-                #     func, num_query_samples, input_dim
-                # )
-                # tasks.append((support_x, support_y, query_x, query_y))
             loss = maml.outer_step(tasks)
             total_loss += loss
         avg_loss = total_loss / (tasks_per_batch * num_batches)
         print(f"Epoch {epoch+1}, Average Loss: {avg_loss:.4f}")
         query_losses.append(avg_loss)
+
+        # Periodic evaluation
+        if (epoch + 1) % 50 == 0:  # Evaluate every 50 epochs
+            total_eval_loss = 0
+            for func_idx_eval, func_eval in enumerate(functions):
+                eval_support_x, eval_support_y, eval_query_x, eval_query_y = tasks_eval[
+                    func_idx_eval
+                ]
+
+                adapted_params_eval_dict = maml.inner_loop(
+                    eval_support_x, eval_support_y
+                )
+                adapted_model_eval = maml.clone_model().to(device)
+                adapted_model_eval.load_state_dict(adapted_params_eval_dict)
+                eval_query_pred = adapted_model_eval(eval_query_x)
+                eval_loss = nn.MSELoss()(eval_query_pred, eval_query_y)
+            total_eval_loss += eval_loss.item()
+            print(total_eval_loss / len(functions))
 
         # Add periodic validation
         # if (epoch + 1) % 10 == 0:
@@ -269,19 +281,12 @@ def evaluate_maml(maml, test_functions):
         query_x, query_y = generate_task_data(func, num_query_test_samples, input_dim)
 
         # Adapt to the task
-        adapted_params = maml.inner_loop(support_x, support_y)
+        adapted_params_dict = maml.inner_loop(support_x, support_y)
 
         # Evaluate on query set
         with torch.no_grad():
             adapted_model = maml.clone_model().to(device)
-            adapted_model.load_state_dict(
-                {
-                    name: param
-                    for name, param in zip(
-                        adapted_model.state_dict().keys(), adapted_params
-                    )
-                }
-            )
+            adapted_model.load_state_dict(adapted_params_dict)
             query_pred = adapted_model(query_x)
             loss = nn.MSELoss()(query_pred, query_y)
             total_loss += loss.item()
@@ -325,3 +330,5 @@ plt.grid(True)
 
 # Display the plot
 plt.show()
+
+print(f"Memory address of the model: {hex(id(maml.model))}")
