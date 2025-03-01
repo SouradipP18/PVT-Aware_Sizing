@@ -8,6 +8,8 @@ import matplotlib.pyplot as plt
 from sklearn.preprocessing import StandardScaler
 import os
 import sys
+from collections import OrderedDict
+
 
 working_dir = os.path.dirname(os.path.realpath(__file__))
 sys.path.append(working_dir)
@@ -97,57 +99,66 @@ class MAML:
             self.meta_optimizer, T_0=100
         )
 
+    def update_params(self, params, loss, first_order=True):
+        name_list, tensor_list = zip(*params.items())
+        grads = torch.autograd.grad(
+            loss, tensor_list, create_graph=not first_order, allow_unused=True
+        )
+        updated_params = OrderedDict()
+        for name, param, grad in zip(name_list, tensor_list, grads):
+            if grad is not None:
+                updated_params[name] = param - self.inner_lr * grad
+            else:
+                updated_params[name] = param
+        return updated_params
+
     def inner_loop(self, support_x, support_y):
         present_model = self.clone_model().to(device)
-        present_model.train()
-        inner_loop_optimizer = optim.Adam(present_model.parameters(), self.inner_lr)
+        updated_params = OrderedDict(present_model.named_parameters())
+
         for _ in range(self.num_inner_steps):
-            # Using the current/latest task-specific params for the ongoing few-shot pass, not the self.model (meta-parameters)
+            # present_model.load_state_dict(updated_params)
+            for name, param in present_model.named_parameters():
+                param.data = updated_params[name].data
             pred = present_model(support_x)
             loss = nn.MSELoss()(pred, support_y)
-            inner_loop_optimizer.zero_grad()
-            loss.backward()
-            inner_loop_optimizer.step()
+            updated_params = self.update_params(updated_params, loss)
             print(f"    Inner Step {_+1}, Support Loss: {loss.item():.4f}")
-        return present_model.state_dict()
+        return updated_params
 
     def outer_step(self, tasks):
-        losses = []  # List to collect losses
-        outer_loss = 0
+        meta_loss = 0
+        original_params = OrderedDict(self.model.named_parameters())
         for task_idx, (support_x, support_y, query_x, query_y) in enumerate(tasks):
             print(f"  Running Task {task_idx+1}")
-            adapted_params_dict = self.inner_loop(support_x, support_y)
-            adapted_model = self.clone_model().to(device)
-            adapted_model.load_state_dict(adapted_params_dict)
-            query_pred = adapted_model(query_x)
+            task_adapted_params_dict = self.inner_loop(support_x, support_y)
+            # Temporarily update model parameters
+            for name, param in self.model.named_parameters():
+                param.data = task_adapted_params_dict[name].data
+            query_pred = self.model(query_x)
             query_loss = nn.MSELoss()(query_pred, query_y)
-            # print(query_loss)
-            losses.append(query_loss)
+            meta_loss += query_loss
             print(f"  Task {task_idx+1}, Query Loss: {query_loss.item():.4f}")
+            # Restore original parameters
+            for name, param in self.model.named_parameters():
+                param.data = original_params[name].data
 
         self.model.train()
         for param in self.model.parameters():
             param.requires_grad = True
-        # Calculate the average or total outer loss from the list of losses
-        avg_outer_loss = torch.stack(losses).mean()
-        # print(avg_outer_loss)
-        print(avg_outer_loss.grad_fn)
-        self.meta_optimizer.zero_grad()
-        avg_outer_loss.backward(retain_graph=True)
+        # for name, param in self.model.named_parameters():
+        #     if param.grad is not None:
+        #         print(f"Gradient for {name}: {param.grad.norm().item()}")
+        #     else:
+        #         print(f"No gradient for {name}")
 
-        for name, param in self.model.named_parameters():
-            if param.grad is not None:
-                print(f"Gradient for {name}: {param.grad.norm().item()}")
-            else:
-                print(f"No gradient for {name}")
+        self.meta_optimizer.zero_grad()
+        meta_loss.backward()
         self.meta_optimizer.step()
         self.meta_scheduler.step()
-        return avg_outer_loss.item()
+        return meta_loss.item()
 
     def clone_model(self):
-        # clone = copy.deepcopy(self.model)
-        # clone.load_state_dict(self.model.state_dict())
-        # return clone
         return copy.deepcopy(self.model).to(device)
 
 
@@ -185,9 +196,9 @@ num_tasks = (
 )
 tasks_per_batch = 8  # 5
 num_batches = 8  # 10 # 100 # 10000
-num_support_samples = 30  # "Few Shots" during training and inference/evaluation
-num_query_samples = 60  # During training
-num_epochs = 200  # 500  # 10000  # Number of Meta-Iterations
+num_support_samples = 10  # "Few Shots" during training and inference/evaluation
+num_query_samples = 50  # During training
+num_epochs = 1000  # 500  # 10000  # Number of Meta-Iterations
 
 # functions = generate_simple_functions(num_tasks, input_dim, output_dim)
 functions = generate_polynomial_functions(num_tasks)
@@ -239,14 +250,16 @@ def train_maml(maml, functions, num_epochs, tasks_per_batch):
                     func_idx_eval
                 ]
 
+                adapted_model_eval = maml.clone_model().to(device)
                 adapted_params_eval_dict = maml.inner_loop(
                     eval_support_x, eval_support_y
                 )
-                adapted_model_eval = maml.clone_model().to(device)
-                adapted_model_eval.load_state_dict(adapted_params_eval_dict)
+                for name, param in adapted_model_eval.named_parameters():
+                    param.data = adapted_params_eval_dict[name].data
+
                 eval_query_pred = adapted_model_eval(eval_query_x)
                 eval_loss = nn.MSELoss()(eval_query_pred, eval_query_y)
-            total_eval_loss += eval_loss.item()
+                total_eval_loss += eval_loss.item()
             print(total_eval_loss / len(functions))
 
         # Add periodic validation
@@ -301,7 +314,7 @@ model = SimpleNet(input_dim, output_dim).to(device)
 # model_save_path = os.path.join(working_dir, "Nominal_Model.pth")
 # model.load_state_dict(torch.load(model_save_path))
 
-maml = MAML(model, inner_lr=0.02, num_inner_steps=num_shots)
+maml = MAML(model, inner_lr=0.01, num_inner_steps=num_shots)
 train_maml(maml, functions, num_epochs=num_epochs, tasks_per_batch=tasks_per_batch)
 eval_loss = evaluate_maml(maml, test_functions)
 print(f"Evaluation Loss: {eval_loss}")
