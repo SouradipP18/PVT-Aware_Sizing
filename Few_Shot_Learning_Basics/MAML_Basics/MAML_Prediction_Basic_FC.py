@@ -77,8 +77,8 @@ class SimpleNet(nn.Module):
     def __init__(self, input_dim, output_dim):
         super(SimpleNet, self).__init__()
         self.fc1 = nn.Linear(input_dim, 128)
-        self.fc2 = nn.Linear(128, 128)
-        self.fc3 = nn.Linear(128, 128)
+        self.fc2 = nn.Linear(128, 512)
+        self.fc3 = nn.Linear(512, 128)
         self.fc4 = nn.Linear(128, output_dim)
 
     def forward(self, x):
@@ -93,7 +93,7 @@ class MAML:
     def __init__(self, model, inner_lr, num_inner_steps):
         self.model = model.to(device)
         self.inner_lr = inner_lr
-        self.num_inner_steps = num_inner_steps  # Number of shots
+        self.num_inner_steps = num_inner_steps
         self.meta_optimizer = optim.Adam(self.model.parameters())
         self.meta_scheduler = optim.lr_scheduler.CosineAnnealingWarmRestarts(
             self.meta_optimizer, T_0=100
@@ -122,7 +122,9 @@ class MAML:
                 param.data = updated_params[name].data
             pred = present_model(support_x)
             loss = nn.MSELoss()(pred, support_y)
-            updated_params = self.update_params(updated_params, loss)
+            updated_params = self.update_params(
+                OrderedDict(present_model.named_parameters()), loss
+            )
             print(f"    Inner Step {_+1}, Support Loss: {loss.item():.4f}")
         return updated_params
 
@@ -188,20 +190,22 @@ def preprocess_data(train_x, train_y, test_x, test_y):
 
 input_dim = 5
 output_dim = 5
-num_shots = 2  # 5
+num_inner_loop_steps = 10  # 5
 
 # Hyper-parameters
 num_tasks = (
     45  # 16+1 # More the tasks, better the generalization/evaluation score on new tasks
 )
-tasks_per_batch = 8  # 5
-num_batches = 8  # 10 # 100 # 10000
-num_support_samples = 10  # "Few Shots" during training and inference/evaluation
-num_query_samples = 50  # During training
-num_epochs = 1000  # 500  # 10000  # Number of Meta-Iterations
+tasks_per_batch = 5  # 5
+num_batches = 10  # 10 # 100 # 10000
+num_support_samples = (
+    100  # = Number of "shots". "Few Shots" during training and inference/evaluation
+)
+num_query_samples = 400  # During training
+num_epochs = 200  # 500  # 10000  # Number of Meta-Iterations
 
-# functions = generate_simple_functions(num_tasks, input_dim, output_dim)
-functions = generate_polynomial_functions(num_tasks)
+functions = generate_simple_functions(num_tasks, input_dim, output_dim)
+# functions = generate_polynomial_functions(num_tasks)
 
 query_losses = []
 support_losses = []
@@ -270,12 +274,10 @@ def train_maml(maml, functions, num_epochs, tasks_per_batch):
 
 ################### Evaluation of the learnt meta/starting parameters on 5 Unseen functions ########################
 
-# test_functions = generate_simple_functions(5, input_dim, output_dim)
-test_functions = generate_polynomial_functions(5)
-num_support_test_samples = num_support_samples
-num_query_test_samples = (
-    20  # Small since the available data would be small during evaluation
-)
+test_functions = generate_simple_functions(5, input_dim, output_dim)
+# test_functions = generate_polynomial_functions(5)
+num_support_test_samples = num_support_samples  # # Small since the available data would be small during evaluation
+num_query_test_samples = 500  # Just for evaluation data (not counted since this info is not used to model during testing)
 
 
 def evaluate_maml(maml, test_functions):
@@ -314,7 +316,7 @@ model = SimpleNet(input_dim, output_dim).to(device)
 # model_save_path = os.path.join(working_dir, "Nominal_Model.pth")
 # model.load_state_dict(torch.load(model_save_path))
 
-maml = MAML(model, inner_lr=0.01, num_inner_steps=num_shots)
+maml = MAML(model, inner_lr=0.001, num_inner_steps=num_inner_loop_steps)
 train_maml(maml, functions, num_epochs=num_epochs, tasks_per_batch=tasks_per_batch)
 eval_loss = evaluate_maml(maml, test_functions)
 print(f"Evaluation Loss: {eval_loss}")
