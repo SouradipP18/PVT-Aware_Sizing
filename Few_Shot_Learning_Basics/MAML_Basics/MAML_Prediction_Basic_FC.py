@@ -76,10 +76,10 @@ def generate_polynomial_functions(
 class SimpleNet(nn.Module):
     def __init__(self, input_dim, output_dim):
         super(SimpleNet, self).__init__()
-        self.fc1 = nn.Linear(input_dim, 128)
-        self.fc2 = nn.Linear(128, 512)
-        self.fc3 = nn.Linear(512, 128)
-        self.fc4 = nn.Linear(128, output_dim)
+        self.fc1 = nn.Linear(input_dim, 512)
+        self.fc2 = nn.Linear(512, 512)
+        self.fc3 = nn.Linear(512, 512)
+        self.fc4 = nn.Linear(512, output_dim)
 
     def forward(self, x):
         x = torch.relu(self.fc1(x))
@@ -199,13 +199,13 @@ num_tasks = (
 tasks_per_batch = 5  # 5
 num_batches = 10  # 10 # 100 # 10000
 num_support_samples = (
-    100  # = Number of "shots". "Few Shots" during training and inference/evaluation
+    200  # = Number of "shots". "Few Shots" during training and inference/evaluation
 )
-num_query_samples = 400  # During training
-num_epochs = 200  # 500  # 10000  # Number of Meta-Iterations
+num_query_samples = 500  # During training
+num_epochs = 1200  # 2000  # 500  # 10000  # Number of Meta-Iterations
 
-functions = generate_simple_functions(num_tasks, input_dim, output_dim)
-# functions = generate_polynomial_functions(num_tasks)
+# functions = generate_simple_functions(num_tasks, input_dim, output_dim)
+functions = generate_polynomial_functions(num_tasks)
 
 query_losses = []
 support_losses = []
@@ -274,10 +274,10 @@ def train_maml(maml, functions, num_epochs, tasks_per_batch):
 
 ################### Evaluation of the learnt meta/starting parameters on 5 Unseen functions ########################
 
-test_functions = generate_simple_functions(5, input_dim, output_dim)
-# test_functions = generate_polynomial_functions(5)
+# test_functions = generate_simple_functions(5, input_dim, output_dim)
+test_functions = generate_polynomial_functions(5)
 num_support_test_samples = num_support_samples  # # Small since the available data would be small during evaluation
-num_query_test_samples = 500  # Just for evaluation data (not counted since this info is not used to model during testing)
+num_query_test_samples = 400  # Just for evaluation data (not counted since this info is not used to model during testing)
 
 
 def evaluate_maml(maml, test_functions):
