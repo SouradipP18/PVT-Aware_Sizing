@@ -192,7 +192,7 @@ def preprocess_data(train_x, train_y, test_x, test_y):
 
 input_dim = 5
 output_dim = 3
-num_inner_loop_steps = 10  # 5
+num_inner_loop_steps = 25  # 5
 
 # Hyper-parameters
 num_tasks = (
@@ -204,7 +204,7 @@ num_support_samples = (
     200  # = Number of "shots". "Few Shots" during training and inference/evaluation
 )
 num_query_samples = 500  # During training
-num_epochs = 800  # 1200  # 2000  # 500  # 10000  # Number of Meta-Iterations
+num_epochs = 600  # 1200  # 2000  # 500  # 10000  # Number of Meta-Iterations
 
 # Training functions:
 # functions = generate_simple_functions(num_tasks)
@@ -367,7 +367,7 @@ model = SimpleNet(input_dim, output_dim).to(device)
 # model_save_path = os.path.join(working_dir, "Nominal_Model.pth")
 # model.load_state_dict(torch.load(model_save_path))
 
-maml = MAML(model, inner_lr=0.001, num_inner_steps=num_inner_loop_steps)
+maml = MAML(model, inner_lr=0.0005, num_inner_steps=num_inner_loop_steps)
 train_maml(maml, functions, num_epochs=num_epochs, tasks_per_batch=tasks_per_batch)
 eval_loss = evaluate_maml(maml, test_functions)
 print(f"Evaluation Loss: {eval_loss}")
