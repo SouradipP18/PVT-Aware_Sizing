@@ -27,7 +27,7 @@ device = torch.device("cuda" if cuda.is_available() else "cpu")
 
 
 # Generate 17 similar functions
-def generate_simple_functions(num_functions, input_dim=5, output_dim=5):
+def generate_simple_functions(num_functions, input_dim=5, output_dim=3):
     functions = []
     for _ in range(num_functions):
         # Generate random coefficients for each function
@@ -43,30 +43,32 @@ def generate_simple_functions(num_functions, input_dim=5, output_dim=5):
     return functions
 
 
-def generate_polynomial_functions(
-    num_functions, input_dim=5, output_dim=5, max_degree=3
-):
+def generate_polynomial_functions(num_functions, input_dim=5, output_dim=3):
     polyfunctions = []
     for _ in range(num_functions):
-        # Generate random coefficients for each function and for each degree
-        # coeffs shape will be (output_dim, input_dim, max_degree)
-        # Each output dimension will have a different polynomial equation
-        coeffs = np.random.randn(output_dim, input_dim, max_degree) * 0.1
+        coeffs = {
+            "linear": np.random.randn(output_dim, input_dim) * 0.1,
+            "quadratic": np.random.randn(output_dim, input_dim) * 0.1,
+            "cubic": np.random.randn(output_dim, input_dim) * 0.1,
+        }
         bias = np.random.randn(output_dim) * 0.1
 
         def poly_func(x, coeff=coeffs, b=bias):
-            # x should be (n_samples, input_dim)
-            # We calculate the polynomial for each input dimension and sum them
             y = np.zeros((x.shape[0], output_dim))
             for i in range(output_dim):
-                for j in range(input_dim):
-                    for d in range(max_degree):
-                        # Compute x^d for the current degree, d+1 because range starts at 0
-                        y[:, i] += coeff[i, j, d] * np.power(x[:, j], d + 1)
+                # Linear term
+                y[:, i] += np.dot(x, coeff["linear"][i, :])
+                # Quadratic term
+                y[:, i] += np.dot(np.power(x, 2), coeff["quadratic"][i, :])
+                # Cubic term
+                y[:, i] += np.dot(np.power(x, 3), coeff["cubic"][i, :])
+                # Add bias
                 y[:, i] += b[i]
+
             return y
 
         polyfunctions.append(poly_func)
+
     return polyfunctions
 
 
@@ -164,13 +166,6 @@ class MAML:
         return copy.deepcopy(self.model).to(device)
 
 
-# Generate data for a task
-def generate_task_data(func, num_samples, input_dim):
-    x = np.random.randn(num_samples, input_dim)
-    y = func(x)
-    return torch.FloatTensor(x).to(device), torch.FloatTensor(y).to(device)
-
-
 def preprocess_data(train_x, train_y, test_x, test_y):
     # Move tensors to CPU and convert to NumPy arrays
     train_x = train_x.cpu().numpy()
@@ -196,7 +191,7 @@ def preprocess_data(train_x, train_y, test_x, test_y):
 
 
 input_dim = 5
-output_dim = 5
+output_dim = 3
 num_inner_loop_steps = 10  # 5
 
 # Hyper-parameters
@@ -209,10 +204,19 @@ num_support_samples = (
     200  # = Number of "shots". "Few Shots" during training and inference/evaluation
 )
 num_query_samples = 500  # During training
-num_epochs = 1200  # 2000  # 500  # 10000  # Number of Meta-Iterations
+num_epochs = 800  # 1200  # 2000  # 500  # 10000  # Number of Meta-Iterations
 
-# functions = generate_simple_functions(num_tasks, input_dim, output_dim)
+# Training functions:
+# functions = generate_simple_functions(num_tasks)
 functions = generate_polynomial_functions(num_tasks)
+
+# test_functions = generate_simple_functions(5, input_dim, output_dim)
+# test_functions = generate_simple_functions(5)
+test_functions = generate_polynomial_functions(5)
+
+num_support_test_samples = num_support_samples  # # Small since the available data would be small during evaluation
+num_query_test_samples = num_query_samples  # Just for evaluation data (not counted since this info is not used to model during testing)
+
 
 query_losses = []
 support_losses = []
@@ -220,16 +224,62 @@ support_losses = []
 # Pre-generate task data to keep a count on the amount of training data needed
 task_data = {}
 tasks_eval = []
+
+# Total number of samples (support + query)
+total_samples = num_support_samples + num_query_samples
+x_total = np.random.randn(
+    total_samples, input_dim
+)  # Same x_total for all functions (train + eval)
+x_total = torch.FloatTensor(x_total)
+indices = np.random.permutation(total_samples)
+support_indices = indices[:num_support_samples]
+query_indices = indices[num_support_samples:]
+
+# Iterate over all functions to generate corresponding y values
+
+# Train Functions
+
 for func_id, func in enumerate(functions):
-    task_support_x, task_support_y = generate_task_data(
-        func, num_support_samples, input_dim
-    )
-    task_query_x, task_query_y = generate_task_data(func, num_query_samples, input_dim)
+    y_total = func(x_total.cpu().numpy())
+    y_total = torch.FloatTensor(y_total).to(device)
+
+    task_support_x, task_support_y = x_total[support_indices], y_total[support_indices]
+    task_query_x, task_query_y = x_total[query_indices], y_total[query_indices]
     task_support_x, task_support_y, task_query_x, task_query_y = preprocess_data(
         task_support_x, task_support_y, task_query_x, task_query_y
     )
     task_data[func_id] = (task_support_x, task_support_y, task_query_x, task_query_y)
     tasks_eval.append(task_data[func_id])
+
+
+# Test Functions for final evaluation
+test_task_data = {}
+
+for test_func_id, test_func in enumerate(test_functions):
+    y_total = test_func(x_total)
+    y_total = torch.FloatTensor(y_total).to(device)
+    test_task_support_x, test_task_support_y = (
+        x_total[support_indices],
+        y_total[support_indices],
+    )
+    test_task_query_x, test_task_query_y = (
+        x_total[query_indices],
+        y_total[query_indices],
+    )
+    test_task_support_x, test_task_support_y, test_task_query_x, test_task_query_y = (
+        preprocess_data(
+            test_task_support_x,
+            test_task_support_y,
+            test_task_query_x,
+            test_task_query_y,
+        )
+    )
+    test_task_data[test_func_id] = (
+        test_task_support_x,
+        test_task_support_y,
+        test_task_query_x,
+        test_task_query_y,
+    )
 
 
 # Main training loop
@@ -281,11 +331,6 @@ def train_maml(maml, functions, num_epochs, tasks_per_batch):
 
 ################### Evaluation of the learnt meta/starting parameters on 5 Unseen functions ########################
 
-# test_functions = generate_simple_functions(5, input_dim, output_dim)
-test_functions = generate_polynomial_functions(5)
-num_support_test_samples = num_support_samples  # # Small since the available data would be small during evaluation
-num_query_test_samples = 400  # Just for evaluation data (not counted since this info is not used to model during testing)
-
 
 def evaluate_maml(maml, test_functions):
     maml.model.eval()
@@ -294,23 +339,22 @@ def evaluate_maml(maml, test_functions):
         "%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%% Evaluation Starts Here %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%"
     )
     total_loss = 0
-    for func_idx, func in enumerate(test_functions):
+    for test_func_idx, test_func in enumerate(test_functions):
         print()
-        print(f"Evaluation Task {func_idx+1} :::::::::::::::::::")
-        support_x, support_y = generate_task_data(
-            func, num_support_test_samples, input_dim
-        )
-        query_x, query_y = generate_task_data(func, num_query_test_samples, input_dim)
+        print(f"Evaluation Task {test_func_idx+1} :::::::::::::::::::")
+        test_support_x, test_support_y, test_query_x, test_query_y = test_task_data[
+            test_func_idx
+        ]
 
         # Adapt to the task
-        adapted_params_dict = maml.inner_loop(support_x, support_y)
+        adapted_params_dict = maml.inner_loop(test_support_x, test_support_y)
 
         # Evaluate on query set
         with torch.no_grad():
             adapted_model = maml.clone_model().to(device)
             adapted_model.load_state_dict(adapted_params_dict)
-            query_pred = adapted_model(query_x)
-            loss = nn.MSELoss()(query_pred, query_y)
+            test_query_pred = adapted_model(test_query_x)
+            loss = nn.MSELoss()(test_query_pred, test_query_y)
             total_loss += loss.item()
         print(f"  Query Loss: {loss.item():.4f}")
     return total_loss / len(test_functions)
