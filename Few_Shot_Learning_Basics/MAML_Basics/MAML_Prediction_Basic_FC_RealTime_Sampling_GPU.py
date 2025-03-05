@@ -61,10 +61,10 @@ def generate_polynomial_functions(num_functions, input_dim=5, output_dim=3):
 class SimpleNet(nn.Module):
     def __init__(self, input_dim, output_dim):
         super(SimpleNet, self).__init__()
-        self.fc1 = nn.Linear(input_dim, 256)  # 256
-        self.fc2 = nn.Linear(256, 256)
-        self.fc3 = nn.Linear(256, 256)
-        self.fc4 = nn.Linear(256, output_dim)
+        self.fc1 = nn.Linear(input_dim, 512)  # 256
+        self.fc2 = nn.Linear(512, 512)
+        self.fc3 = nn.Linear(512, 512)
+        self.fc4 = nn.Linear(512, output_dim)
 
     def forward(self, x):
         x = torch.relu(self.fc1(x))
@@ -185,7 +185,7 @@ num_tasks = (
 )
 tasks_per_batch = 8  # 5
 num_batches = 6  # 10 # 100 # 10000
-num_support_samples = 100
+num_support_samples = 200
 num_query_samples = 500  # During training
 num_epochs = 700  # 450 # 1200  # 2000  # 500  # 10000  # Number of Meta-Iterations
 
@@ -257,6 +257,7 @@ for test_func_id, test_func in enumerate(test_functions):
     )
 """
 
+data_usage_counter = {}
 
 # Main training loop
 def train_maml(maml, functions, num_epochs, tasks_per_batch):
@@ -273,6 +274,9 @@ def train_maml(maml, functions, num_epochs, tasks_per_batch):
                 f"Epoch {epoch+1}, Batch {batch+1}, Selected Task IDs: {selected_funcs}"
             )
             for func_id in selected_funcs:
+                # Initialize the counter for the current func_id if not already present
+                if func_id not in data_usage_counter:
+                    data_usage_counter[func_id] = 0
                 # Sampling Support And Query for this function i.e. task T
                 x_total = np.random.randn(total_samples, input_dim)
                 x_total = torch.FloatTensor(x_total)
@@ -280,6 +284,8 @@ def train_maml(maml, functions, num_epochs, tasks_per_batch):
                 support_indices = indices[:num_support_samples]
                 query_indices = indices[num_support_samples:]
                 func = functions[func_id]
+                # Update the counter with the number of samples used
+                data_usage_counter[func_id] += total_samples
                 y_total = func(x_total.cpu().numpy())
                 y_total = torch.FloatTensor(y_total)
                 task_support_x, task_support_y = (
@@ -419,3 +425,18 @@ plt.grid(True)
 plt.show()
 
 print(f"Memory address of the model: {hex(id(maml.model))}")
+
+
+indices = list(data_usage_counter.keys())
+data_counts = list(data_usage_counter.values())
+
+# Create a bar plot
+plt.figure(figsize=(10, 6))
+plt.bar(indices, data_counts, color='skyblue', edgecolor='black')
+plt.xlabel("Function ID")
+plt.ylabel("Total Data Used")
+plt.title("Data Usage per Function")
+plt.xticks(indices)  # Ensure proper labeling of function IDs
+plt.grid(axis='y', linestyle='--', alpha=0.7)
+plt.tight_layout()
+plt.show()
