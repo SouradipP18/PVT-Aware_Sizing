@@ -61,10 +61,10 @@ def generate_polynomial_functions(num_functions, input_dim=5, output_dim=3):
 class SimpleNet(nn.Module):
     def __init__(self, input_dim, output_dim):
         super(SimpleNet, self).__init__()
-        self.fc1 = nn.Linear(input_dim, 512)  # 256
-        self.fc2 = nn.Linear(512, 512)
-        self.fc3 = nn.Linear(512, 512)
-        self.fc4 = nn.Linear(512, output_dim)
+        self.fc1 = nn.Linear(input_dim, 256)  # 256
+        self.fc2 = nn.Linear(256, 256)
+        self.fc3 = nn.Linear(256, 256)
+        self.fc4 = nn.Linear(256, output_dim)
 
     def forward(self, x):
         x = torch.relu(self.fc1(x))
@@ -183,11 +183,11 @@ num_inner_loop_steps = 20  # 5
 num_tasks = (
     45  # 16+1 # More the tasks, better the generalization/evaluation score on new tasks
 )
-tasks_per_batch = 5  # 5
-num_batches = 10  # 10 # 100 # 10000
+tasks_per_batch = 8  # 5
+num_batches = 6  # 10 # 100 # 10000
 num_support_samples = 100
 num_query_samples = 500  # During training
-num_epochs = 450  # 600 # 1200  # 2000  # 500  # 10000  # Number of Meta-Iterations
+num_epochs = 700  # 450 # 1200  # 2000  # 500  # 10000  # Number of Meta-Iterations
 
 # Training functions:
 functions = generate_polynomial_functions(num_tasks)
