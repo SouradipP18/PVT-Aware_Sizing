@@ -99,7 +99,7 @@ def preprocess_data(train_x, train_y, test_x, test_y):
 
 input_dim = 5
 output_dim = 3
-num_inner_loop_steps = 20  # 5
+num_inner_loop_steps = 15  # 5
 
 # Hyper-parameters
 num_tasks = (
@@ -109,7 +109,9 @@ tasks_per_batch = 8  # 5
 num_batches = 6  # 10 # 100 # 10000
 num_support_samples = 200 # During training
 num_query_samples = 500   # During training
-num_epochs = 700  # 450 # 1200  # 2000  # 500  # 10000  # Number of Meta-Iterations
+num_epochs = 300#700  # 450 # 1200  # 2000  # 500  # 10000  # Number of Meta-Iterations
+
+# nan issue: Increase epochs reduce inner loop steps slightly and clip gradients
 
 # Training functions:
 functions = generate_polynomial_functions(num_tasks)
@@ -178,18 +180,21 @@ def train_maml(maml, functions, meta_optimizer, meta_scheduler, num_epochs, task
             
             # Training maml for this batch
             meta_loss = 0.0
-            for support_x, support_y, query_x, query_y in tasks:
-                task_learner = maml.clone().to(device)  # Clone the meta-learner
+            for task_idx, (support_x, support_y, query_x, query_y) in enumerate(tasks):
+                task_learner = maml.clone() # Clone the meta-learner
+                print(f"  Running Task {task_idx+1}")
                 # Inner loop: Adapt the model using the support set
                 for _ in range(num_inner_loop_steps):
                     preds = task_learner(support_x)
                     task_loss = nn.MSELoss()(preds, support_y)
                     task_learner.adapt(task_loss)
+                    print(f"    Inner Step {_+1}, Support Loss: {task_loss.item():.4f}")
                 
                 # Outer loop: Evaluate the adapted model on the query set
                 query_preds = task_learner(query_x)
                 query_loss = nn.MSELoss()(query_preds, query_y)
                 meta_loss += query_loss
+                print(f"  Task {task_idx+1}, Query Loss: {query_loss.item():.4f}")
 
             # Meta-optimization step
             meta_optimizer.zero_grad()
@@ -210,7 +215,7 @@ def train_maml(maml, functions, meta_optimizer, meta_scheduler, num_epochs, task
                 eval_query_x,
                 eval_query_y,
             ) in total_tasks_epoch:
-                adapted_model_eval = maml.clone().to(device)
+                adapted_model_eval = maml.clone()
                 # Inner loop: Adapt the model using the eval_support set
                 for _ in range(num_inner_loop_steps):
                     eval_preds = adapted_model_eval(eval_support_x)
@@ -263,7 +268,7 @@ def evaluate_maml(maml, test_functions):
             test_support_x, test_support_y, test_query_x, test_query_y
         )
         # Adapt to the task
-        eval_task_learner = maml.clone().to(device)
+        eval_task_learner = maml.clone()
         for _ in range(num_inner_loop_steps):
             preds = eval_task_learner(test_support_x)
             eval_task_loss = nn.MSELoss()(preds, test_support_y)
@@ -313,9 +318,7 @@ plt.grid(True)
 # Display the plot
 plt.show()
 
-print(f"Memory address of the model: {hex(id(maml.model))}")
-
-
+'''
 indices = list(data_usage_counter.keys())
 data_counts = list(data_usage_counter.values())
 
@@ -328,4 +331,5 @@ plt.title("Data Usage per Function")
 plt.xticks(indices)  # Ensure proper labeling of function IDs
 plt.grid(axis='y', linestyle='--', alpha=0.7)
 plt.tight_layout()
-plt.show()
+plt.show()'
+'''
