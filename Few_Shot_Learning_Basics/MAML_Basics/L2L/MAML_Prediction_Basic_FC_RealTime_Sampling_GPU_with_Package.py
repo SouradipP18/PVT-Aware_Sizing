@@ -10,6 +10,7 @@ import os
 import sys
 from collections import OrderedDict
 import learn2learn as l2l
+from sklearn.metrics import r2_score
 
 working_dir = os.path.dirname(os.path.realpath(__file__))
 sys.path.append(working_dir)
@@ -99,7 +100,7 @@ def preprocess_data(train_x, train_y, test_x, test_y):
 
 input_dim = 5
 output_dim = 3
-num_inner_loop_steps = 15  # 5
+num_inner_loop_steps = 18  # 5
 
 # Hyper-parameters
 num_tasks = (
@@ -109,7 +110,7 @@ tasks_per_batch = 8  # 5
 num_batches = 6  # 10 # 100 # 10000
 num_support_samples = 200 # During training
 num_query_samples = 500   # During training
-num_epochs = 300#700  # 450 # 1200  # 2000  # 500  # 10000  # Number of Meta-Iterations
+num_epochs = 350#300 #700  # 450 # 1200  # 2000  # 500  # 10000  # Number of Meta-Iterations
 
 # nan issue: Increase epochs reduce inner loop steps slightly and clip gradients
 
@@ -278,7 +279,13 @@ def evaluate_maml(maml, test_functions):
             query_preds = eval_task_learner(test_query_x)
             loss = nn.MSELoss()(query_preds, test_query_y)
             total_loss += loss.item()
+            
+            # Calculate R² score
+            query_preds_np = query_preds.cpu().numpy()
+            test_query_y_np = test_query_y.cpu().numpy()
+            r2 = r2_score(test_query_y_np, query_preds_np)  # Sklearn's R² calculation
         print(f"  Query Loss: {loss.item():.4f}")
+        print(f"  Query R2 Score: {r2:.4f}")
     return total_loss / len(test_functions)
 
 
@@ -308,9 +315,9 @@ plt.plot(
 )  # Line plot with blue line and circle markers
 
 # Adding title and labels
-plt.title("Plot of List Values vs. Indices")
-plt.xlabel("Index")
-plt.ylabel("Value")
+plt.title("Training Query Loss vs. Epochs")
+plt.xlabel("Epochs")
+plt.ylabel("Training Query Loss")
 
 # Show grid
 plt.grid(True)
@@ -318,18 +325,17 @@ plt.grid(True)
 # Display the plot
 plt.show()
 
-'''
-indices = list(data_usage_counter.keys())
+
+function_ids = list(data_usage_counter.keys())
 data_counts = list(data_usage_counter.values())
 
 # Create a bar plot
 plt.figure(figsize=(10, 6))
-plt.bar(indices, data_counts, color='skyblue', edgecolor='black')
+plt.bar(function_ids, data_counts, color='skyblue', edgecolor='black')
 plt.xlabel("Function ID")
 plt.ylabel("Total Data Used")
 plt.title("Data Usage per Function")
-plt.xticks(indices)  # Ensure proper labeling of function IDs
+plt.xticks(function_ids)  # Ensure proper labeling of function IDs
 plt.grid(axis='y', linestyle='--', alpha=0.7)
 plt.tight_layout()
-plt.show()'
-'''
+plt.show()
